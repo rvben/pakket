@@ -169,29 +169,92 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
             Ok(())
         }
         Command::Config(ConfigCommand::Init) => {
-            use dialoguer::Input;
+            use dialoguer::{Confirm, Input};
 
             let config_path = pakket::config::config_path();
             let profile = cli.profile.as_deref().unwrap_or("default");
 
+            eprintln!("pakket supports three tracking backends:\n");
+            eprintln!("  PostNL   No account needed, just your postal code");
+            eprintln!("  DHL      Free API key (personal signup, no company)");
+            eprintln!("  17track  3200+ carriers (requires account signup)\n");
+
+            // 1. PostNL — just a postcode
             let postcode: String = Input::new()
-                .with_prompt("Default postal code (for PostNL tracking)")
+                .with_prompt("Your postal code (enables PostNL tracking)")
                 .allow_empty(true)
                 .interact_text()
                 .map_err(|e| Error::Other(format!("input error: {e}")))?;
 
-            let dhl_key: String = Input::new()
-                .with_prompt("DHL API key (free at developer.dhl.com, leave empty to skip)")
-                .allow_empty(true)
-                .interact_text()
-                .map_err(|e| Error::Other(format!("input error: {e}")))?;
+            // 2. DHL — free API key
+            let dhl_key = if Confirm::new()
+                .with_prompt("Set up DHL tracking?")
+                .default(true)
+                .interact()
+                .map_err(|e| Error::Other(format!("input error: {e}")))?
+            {
+                eprintln!("\n  1. Sign up at https://developer.dhl.com (free, personal)");
+                eprintln!("  2. Create an app and copy the API key\n");
 
-            let seventeen_key: String = Input::new()
-                .with_prompt("17track API key (optional, for other carriers)")
-                .allow_empty(true)
-                .interact_text()
-                .map_err(|e| Error::Other(format!("input error: {e}")))?;
+                if Confirm::new()
+                    .with_prompt("Open signup page in browser?")
+                    .default(true)
+                    .interact()
+                    .map_err(|e| Error::Other(format!("input error: {e}")))?
+                {
+                    let _ = open::that("https://developer.dhl.com/user/register");
+                }
 
+                let key: String = Input::new()
+                    .with_prompt("DHL API key (empty to skip)")
+                    .allow_empty(true)
+                    .interact_text()
+                    .map_err(|e| Error::Other(format!("input error: {e}")))?;
+
+                if !key.is_empty() {
+                    Some(key)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // 3. 17track — universal
+            let seventeen_key = if Confirm::new()
+                .with_prompt("Set up 17track? (3200+ carriers, requires account)")
+                .default(false)
+                .interact()
+                .map_err(|e| Error::Other(format!("input error: {e}")))?
+            {
+                eprintln!("\n  1. Sign up at https://www.17track.net/en/api");
+                eprintln!("  2. Go to Settings and copy your API key\n");
+
+                if Confirm::new()
+                    .with_prompt("Open signup page in browser?")
+                    .default(true)
+                    .interact()
+                    .map_err(|e| Error::Other(format!("input error: {e}")))?
+                {
+                    let _ = open::that("https://www.17track.net/en/api");
+                }
+
+                let key: String = Input::new()
+                    .with_prompt("17track API key (empty to skip)")
+                    .allow_empty(true)
+                    .interact_text()
+                    .map_err(|e| Error::Other(format!("input error: {e}")))?;
+
+                if !key.is_empty() {
+                    Some(key)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Save
             pakket::config::Config::save_config(
                 &config_path,
                 profile,
@@ -200,19 +263,26 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
                 } else {
                     Some(&postcode)
                 },
-                if dhl_key.is_empty() {
-                    None
-                } else {
-                    Some(&dhl_key)
-                },
-                if seventeen_key.is_empty() {
-                    None
-                } else {
-                    Some(&seventeen_key)
-                },
+                dhl_key.as_deref(),
+                seventeen_key.as_deref(),
             )?;
 
-            eprintln!("Config saved to {}", config_path.display());
+            // Summary
+            eprintln!("\nConfig saved to {}\n", config_path.display());
+            eprintln!("Configured backends:");
+            if !postcode.is_empty() {
+                eprintln!("  PostNL    ready (postcode: {})", postcode);
+            }
+            if dhl_key.is_some() {
+                eprintln!("  DHL       ready");
+            }
+            if seventeen_key.is_some() {
+                eprintln!("  17track   ready (universal)");
+            }
+            if postcode.is_empty() && dhl_key.is_none() && seventeen_key.is_none() {
+                eprintln!("  (none)    run 'pakket config init' again to set up backends");
+            }
+
             Ok(())
         }
         Command::Config(ConfigCommand::Show) => {
