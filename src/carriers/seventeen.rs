@@ -111,39 +111,55 @@ impl Carrier for SeventeenTrack {
 }
 
 fn parse_track_item(item: &serde_json::Value) -> Result<TrackingResult, Error> {
-    let track = item.get("track");
+    let track_info = item.get("track_info");
 
-    let status_code = track
-        .and_then(|t| t.get("e"))
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
+    // Carrier name from provider
+    let carrier = track_info
+        .and_then(|t| t.pointer("/tracking/providers/0/provider/name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Unknown")
+        .to_string();
 
-    let carrier = track
-        .and_then(|t| t.get("b"))
-        .and_then(|v| v.as_i64())
-        .map(|c| format!("Carrier {c}"))
-        .unwrap_or_else(|| "Unknown".to_string());
+    // Status from latest_status.status
+    let status_str = track_info
+        .and_then(|t| t.pointer("/latest_status/status"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("NotFound");
 
-    let latest = track.and_then(|t| t.get("z0"));
-    let location = latest
-        .and_then(|z| z.get("c"))
+    let status = map_status(status_str);
+
+    // ETA from time_metrics.estimated_delivery_date
+    let eta = track_info
+        .and_then(|t| t.pointer("/time_metrics/estimated_delivery_date/from"))
         .and_then(|v| v.as_str())
         .map(String::from);
-    let last_update = latest
-        .and_then(|z| z.get("a"))
+
+    // Latest event for location and last_update
+    let location = track_info
+        .and_then(|t| t.pointer("/latest_event/location"))
         .and_then(|v| v.as_str())
         .map(String::from);
 
-    let events: Vec<TrackingEvent> = track
-        .and_then(|t| t.get("z1"))
+    let last_update = track_info
+        .and_then(|t| t.pointer("/latest_event/time_iso"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    // Events from tracking.providers[0].events
+    let events: Vec<TrackingEvent> = track_info
+        .and_then(|t| t.pointer("/tracking/providers/0/events"))
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
                 .filter_map(|e| {
                     Some(TrackingEvent {
-                        date: e.get("a")?.as_str()?.to_string(),
-                        location: e.get("c")?.as_str()?.to_string(),
-                        description: e.get("z")?.as_str()?.to_string(),
+                        date: e.get("time_iso")?.as_str()?.to_string(),
+                        location: e
+                            .get("location")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("-")
+                            .to_string(),
+                        description: e.get("description")?.as_str()?.to_string(),
                     })
                 })
                 .collect()
@@ -152,22 +168,23 @@ fn parse_track_item(item: &serde_json::Value) -> Result<TrackingResult, Error> {
 
     Ok(TrackingResult {
         carrier,
-        status: map_status(status_code),
-        eta: None,
+        status,
+        eta,
         location,
         last_update,
         events,
     })
 }
 
-pub fn map_status(code: i64) -> TrackingStatus {
-    match code {
-        0 => TrackingStatus::Pending,
-        30 | 35 | 40 | 45 => TrackingStatus::InTransit,
-        50 => TrackingStatus::OutForDelivery,
-        60 => TrackingStatus::Delivered,
-        70 | 80 => TrackingStatus::Exception,
-        _ => TrackingStatus::NotFound,
+fn map_status(status: &str) -> TrackingStatus {
+    match status {
+        "Delivered" => TrackingStatus::Delivered,
+        "InTransit" => TrackingStatus::InTransit,
+        "OutForDelivery" => TrackingStatus::OutForDelivery,
+        "DeliveryFailure" | "Exception" | "Expired" => TrackingStatus::Exception,
+        "InfoReceived" | "NotFound" => TrackingStatus::Pending,
+        "AvailableForPickup" => TrackingStatus::OutForDelivery,
+        _ => TrackingStatus::Pending,
     }
 }
 
@@ -182,27 +199,54 @@ mod tests {
             "code": 0,
             "data": {
                 "accepted": [{
-                    "number": "TEST123",
-                    "track": {
-                        "b": 1,
-                        "e": 40,
-                        "z0": {
-                            "a": "2026-03-26 14:30",
-                            "c": "Amsterdam, NL",
-                            "z": "Arrived at sorting center"
+                    "number": "CE010269106DE",
+                    "carrier": 7041,
+                    "track_info": {
+                        "shipping_info": {
+                            "shipper_address": { "country": "DE" },
+                            "recipient_address": { "country": "NL" }
                         },
-                        "z1": [
-                            {
-                                "a": "2026-03-26 14:30",
-                                "c": "Amsterdam, NL",
-                                "z": "Arrived at sorting center"
-                            },
-                            {
-                                "a": "2026-03-25 20:15",
-                                "c": "Frankfurt, DE",
-                                "z": "Departed facility"
-                            }
-                        ]
+                        "latest_status": {
+                            "status": "Delivered",
+                            "sub_status": "Delivered_Other"
+                        },
+                        "latest_event": {
+                            "time_iso": "2026-03-26T20:34:00+01:00",
+                            "description": "The shipment has been successfully delivered",
+                            "location": "NL"
+                        },
+                        "time_metrics": {
+                            "days_of_transit": 2,
+                            "estimated_delivery_date": { "from": null, "to": null }
+                        },
+                        "tracking": {
+                            "providers": [{
+                                "provider": {
+                                    "key": 7041,
+                                    "name": "DHL Paket",
+                                    "country": "DE"
+                                },
+                                "events": [
+                                    {
+                                        "time_iso": "2026-03-26T20:34:00+01:00",
+                                        "description": "The shipment has been successfully delivered",
+                                        "location": "NL",
+                                        "stage": "Delivered"
+                                    },
+                                    {
+                                        "time_iso": "2026-03-26T17:11:00+01:00",
+                                        "description": "The shipment has been loaded onto the delivery vehicle",
+                                        "location": "NL",
+                                        "stage": "OutForDelivery"
+                                    },
+                                    {
+                                        "time_iso": "2026-03-25T12:54:00+01:00",
+                                        "description": "The international shipment has been processed",
+                                        "location": "DE"
+                                    }
+                                ]
+                            }]
+                        }
                     }
                 }],
                 "rejected": []
@@ -219,7 +263,7 @@ mod tests {
             .and(header("17token", "test-api-key"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "code": 0,
-                "data": { "accepted": [{"number": "TEST123"}], "rejected": [] }
+                "data": { "accepted": [{"number": "CE010269106DE"}], "rejected": [] }
             })))
             .mount(&server)
             .await;
@@ -233,11 +277,13 @@ mod tests {
             .await;
 
         let client = SeventeenTrack::new("test-api-key", Some(&server.uri()));
-        let result = client.track("TEST123").await.unwrap();
+        let result = client.track("CE010269106DE").await.unwrap();
 
-        assert_eq!(result.status, TrackingStatus::InTransit);
-        assert_eq!(result.events.len(), 2);
-        assert_eq!(result.location, Some("Amsterdam, NL".to_string()));
+        assert_eq!(result.carrier, "DHL Paket");
+        assert_eq!(result.status, TrackingStatus::Delivered);
+        assert_eq!(result.events.len(), 3);
+        assert_eq!(result.location, Some("NL".to_string()));
+        assert!(result.last_update.unwrap().contains("2026-03-26"));
     }
 
     #[tokio::test]
@@ -300,13 +346,14 @@ mod tests {
     }
 
     #[test]
-    fn map_17track_status() {
-        assert_eq!(map_status(0), TrackingStatus::Pending);
-        assert_eq!(map_status(30), TrackingStatus::InTransit);
-        assert_eq!(map_status(35), TrackingStatus::InTransit);
-        assert_eq!(map_status(40), TrackingStatus::InTransit);
-        assert_eq!(map_status(50), TrackingStatus::OutForDelivery);
-        assert_eq!(map_status(60), TrackingStatus::Delivered);
-        assert_eq!(map_status(70), TrackingStatus::Exception);
+    fn map_17track_status_codes() {
+        assert_eq!(map_status("Delivered"), TrackingStatus::Delivered);
+        assert_eq!(map_status("InTransit"), TrackingStatus::InTransit);
+        assert_eq!(map_status("OutForDelivery"), TrackingStatus::OutForDelivery);
+        assert_eq!(map_status("Exception"), TrackingStatus::Exception);
+        assert_eq!(map_status("DeliveryFailure"), TrackingStatus::Exception);
+        assert_eq!(map_status("InfoReceived"), TrackingStatus::Pending);
+        assert_eq!(map_status("NotFound"), TrackingStatus::Pending);
+        assert_eq!(map_status("AvailableForPickup"), TrackingStatus::OutForDelivery);
     }
 }
