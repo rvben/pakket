@@ -169,7 +169,7 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
             Ok(())
         }
         Command::Config(ConfigCommand::Init) => {
-            use dialoguer::{Confirm, Input};
+            use dialoguer::Input;
 
             let config_path = pakket::config::config_path();
             let profile = cli.profile.as_deref().unwrap_or("default");
@@ -187,71 +187,27 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
                 .map_err(|e| Error::Other(format!("input error: {e}")))?;
 
             // 2. DHL — free API key
-            let dhl_key = if Confirm::new()
-                .with_prompt("Set up DHL tracking?")
-                .default(true)
-                .interact()
-                .map_err(|e| Error::Other(format!("input error: {e}")))?
-            {
-                eprintln!("\n  1. Sign up at https://developer.dhl.com (free, personal)");
-                eprintln!("  2. Create an app and copy the API key\n");
-
-                if Confirm::new()
-                    .with_prompt("Open signup page in browser?")
-                    .default(true)
-                    .interact()
-                    .map_err(|e| Error::Other(format!("input error: {e}")))?
-                {
-                    let _ = open::that("https://developer.dhl.com/user/register");
-                }
-
-                let key: String = Input::new()
-                    .with_prompt("DHL API key (empty to skip)")
-                    .allow_empty(true)
-                    .interact_text()
-                    .map_err(|e| Error::Other(format!("input error: {e}")))?;
-
-                if !key.is_empty() {
-                    Some(key)
-                } else {
-                    None
-                }
-            } else {
+            let dhl_key: String = Input::new()
+                .with_prompt("DHL API key (free: developer.dhl.com, empty to skip)")
+                .allow_empty(true)
+                .interact_text()
+                .map_err(|e| Error::Other(format!("input error: {e}")))?;
+            let dhl_key = if dhl_key.is_empty() {
                 None
+            } else {
+                Some(dhl_key)
             };
 
             // 3. 17track — universal
-            let seventeen_key = if Confirm::new()
-                .with_prompt("Set up 17track? (3200+ carriers, requires account)")
-                .default(false)
-                .interact()
-                .map_err(|e| Error::Other(format!("input error: {e}")))?
-            {
-                eprintln!("\n  1. Sign up at https://www.17track.net/en/api");
-                eprintln!("  2. Go to Settings and copy your API key\n");
-
-                if Confirm::new()
-                    .with_prompt("Open signup page in browser?")
-                    .default(true)
-                    .interact()
-                    .map_err(|e| Error::Other(format!("input error: {e}")))?
-                {
-                    let _ = open::that("https://www.17track.net/en/api");
-                }
-
-                let key: String = Input::new()
-                    .with_prompt("17track API key (empty to skip)")
-                    .allow_empty(true)
-                    .interact_text()
-                    .map_err(|e| Error::Other(format!("input error: {e}")))?;
-
-                if !key.is_empty() {
-                    Some(key)
-                } else {
-                    None
-                }
-            } else {
+            let seventeen_key: String = Input::new()
+                .with_prompt("17track API key (3200+ carriers: 17track.net/en/api, empty to skip)")
+                .allow_empty(true)
+                .interact_text()
+                .map_err(|e| Error::Other(format!("input error: {e}")))?;
+            let seventeen_key = if seventeen_key.is_empty() {
                 None
+            } else {
+                Some(seventeen_key)
             };
 
             // Save
