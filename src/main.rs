@@ -3,7 +3,7 @@ use std::process;
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 
-use pakket::carriers::Carrier;
+use pakket::carriers::{Carrier, DetectedCarrier};
 use pakket::error::Error;
 
 #[derive(Parser)]
@@ -33,6 +33,9 @@ enum Command {
         /// Override carrier detection
         #[arg(long)]
         carrier: Option<String>,
+        /// Postal code (required for PostNL)
+        #[arg(long)]
+        postcode: Option<String>,
     },
     /// Save a shipment for ongoing tracking
     Add {
@@ -43,6 +46,9 @@ enum Command {
         /// Override carrier detection
         #[arg(long)]
         carrier: Option<String>,
+        /// Postal code (required for PostNL)
+        #[arg(long)]
+        postcode: Option<String>,
     },
     /// List all saved shipments
     List {
@@ -78,6 +84,10 @@ enum ConfigCommand {
     Show,
 }
 
+fn load_config_optional(profile: Option<&str>) -> Option<pakket::config::Config> {
+    pakket::config::Config::load(profile).ok()
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -109,20 +119,48 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
             Ok(())
         }
         Command::Config(ConfigCommand::Init) => {
-            use dialoguer::Password;
+            use dialoguer::Input;
 
             let config_path = pakket::config::config_path();
-            let api_key: String = Password::new()
-                .with_prompt("17track API key")
-                .interact()
+            let profile = cli.profile.as_deref().unwrap_or("default");
+
+            let postcode: String = Input::new()
+                .with_prompt("Default postal code (for PostNL tracking)")
+                .allow_empty(true)
+                .interact_text()
                 .map_err(|e| Error::Other(format!("input error: {e}")))?;
 
-            eprintln!("Validating API key...");
-            let client = pakket::carriers::seventeen::SeventeenTrack::new(&api_key, None);
-            client.validate_key().await?;
+            let dhl_key: String = Input::new()
+                .with_prompt("DHL API key (free at developer.dhl.com, leave empty to skip)")
+                .allow_empty(true)
+                .interact_text()
+                .map_err(|e| Error::Other(format!("input error: {e}")))?;
 
-            let profile = cli.profile.as_deref().unwrap_or("default");
-            pakket::config::Config::save_api_key(&config_path, profile, &api_key)?;
+            let seventeen_key: String = Input::new()
+                .with_prompt("17track API key (optional, for other carriers)")
+                .allow_empty(true)
+                .interact_text()
+                .map_err(|e| Error::Other(format!("input error: {e}")))?;
+
+            pakket::config::Config::save_config(
+                &config_path,
+                profile,
+                if postcode.is_empty() {
+                    None
+                } else {
+                    Some(&postcode)
+                },
+                if dhl_key.is_empty() {
+                    None
+                } else {
+                    Some(&dhl_key)
+                },
+                if seventeen_key.is_empty() {
+                    None
+                } else {
+                    Some(&seventeen_key)
+                },
+            )?;
 
             eprintln!("Config saved to {}", config_path.display());
             Ok(())
@@ -134,7 +172,11 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
             match std::fs::read_to_string(&path) {
                 Ok(contents) => {
                     for line in contents.lines() {
-                        if line.trim_start().starts_with("api_key") {
+                        let trimmed = line.trim_start();
+                        if trimmed.starts_with("api_key")
+                            || trimmed.starts_with("dhl_api_key")
+                            || trimmed.starts_with("seventeen_track_api_key")
+                        {
                             if let Some((key, _)) = line.split_once('=') {
                                 println!("{key}= \"****\"");
                             } else {
@@ -156,33 +198,101 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
             number,
             history,
             carrier: _carrier,
+            postcode,
         } => {
-            let config = pakket::config::Config::load(cli.profile.as_deref()).unwrap_or_else(|e| {
-                eprintln!("Error: {e}");
-                process::exit(e.exit_code());
-            });
-            let client = pakket::carriers::seventeen::SeventeenTrack::new(&config.api_key, None);
-            match client.track(&number).await {
-                Ok(result) => {
-                    pakket::commands::track::print_result(&output, &result, history);
-                    Ok(())
+            let config = load_config_optional(cli.profile.as_deref());
+            let postcode = postcode.or_else(|| config.as_ref().and_then(|c| c.postcode.clone()));
+
+            let detected = pakket::carriers::detect_carrier(&number);
+            let result = match detected {
+                DetectedCarrier::PostNL => {
+                    let pc = postcode.ok_or_else(|| {
+                        Error::Config(
+                            "PostNL requires --postcode or postcode in config".to_string(),
+                        )
+                    })?;
+                    let client = pakket::carriers::postnl::PostNL::new(None);
+                    client.track_with_postcode(&number, &pc).await?
                 }
-                Err(e) => Err(e),
-            }
+                DetectedCarrier::DHL => {
+                    let api_key = config
+                        .as_ref()
+                        .and_then(|c| c.dhl_api_key.as_ref())
+                        .ok_or_else(|| {
+                            Error::Config("DHL requires dhl_api_key in config".to_string())
+                        })?;
+                    let client = pakket::carriers::dhl::Dhl::new(api_key, None);
+                    client.track(&number).await?
+                }
+                DetectedCarrier::Unknown => {
+                    let api_key = config
+                        .as_ref()
+                        .and_then(|c| c.seventeen_track_api_key.as_ref())
+                        .ok_or_else(|| {
+                            Error::Config(
+                                "Unknown carrier. Configure seventeen_track_api_key for universal tracking"
+                                    .to_string(),
+                            )
+                        })?;
+                    let client = pakket::carriers::seventeen::SeventeenTrack::new(api_key, None);
+                    client.track(&number).await?
+                }
+            };
+
+            pakket::commands::track::print_result(&output, &result, history);
+            Ok(())
         }
         Command::Add {
             name,
             number,
             carrier: _carrier,
+            postcode,
         } => {
-            let config = pakket::config::Config::load(cli.profile.as_deref()).unwrap_or_else(|e| {
-                eprintln!("Error: {e}");
-                process::exit(e.exit_code());
-            });
-            let client = pakket::carriers::seventeen::SeventeenTrack::new(&config.api_key, None);
-            let result = client.track(&number).await?;
+            let config = load_config_optional(cli.profile.as_deref());
+            let postcode = postcode.or_else(|| config.as_ref().and_then(|c| c.postcode.clone()));
 
-            let shipment = pakket::commands::add::create_shipment(&name, &number, &result);
+            let detected = pakket::carriers::detect_carrier(&number);
+            let result = match detected {
+                DetectedCarrier::PostNL => {
+                    let pc = postcode.as_deref().ok_or_else(|| {
+                        Error::Config(
+                            "PostNL requires --postcode or postcode in config".to_string(),
+                        )
+                    })?;
+                    let client = pakket::carriers::postnl::PostNL::new(None);
+                    client.track_with_postcode(&number, pc).await?
+                }
+                DetectedCarrier::DHL => {
+                    let api_key = config
+                        .as_ref()
+                        .and_then(|c| c.dhl_api_key.as_ref())
+                        .ok_or_else(|| {
+                            Error::Config("DHL requires dhl_api_key in config".to_string())
+                        })?;
+                    let client = pakket::carriers::dhl::Dhl::new(api_key, None);
+                    client.track(&number).await?
+                }
+                DetectedCarrier::Unknown => {
+                    let api_key = config
+                        .as_ref()
+                        .and_then(|c| c.seventeen_track_api_key.as_ref())
+                        .ok_or_else(|| {
+                            Error::Config(
+                                "Unknown carrier. Configure seventeen_track_api_key for universal tracking"
+                                    .to_string(),
+                            )
+                        })?;
+                    let client = pakket::carriers::seventeen::SeventeenTrack::new(api_key, None);
+                    client.track(&number).await?
+                }
+            };
+
+            let shipment = pakket::commands::add::create_shipment(
+                &name,
+                &number,
+                postcode.as_deref(),
+                &result,
+            );
             let shipments_path = pakket::config::shipments_path();
             let mut shipments = pakket::shipments::load(&shipments_path)?;
             shipments.push(shipment);
@@ -199,16 +309,15 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
             Ok(())
         }
         Command::List { history, refresh } => {
-            let config = pakket::config::Config::load(cli.profile.as_deref()).unwrap_or_else(|e| {
-                eprintln!("Error: {e}");
-                process::exit(e.exit_code());
-            });
-            let client = pakket::carriers::seventeen::SeventeenTrack::new(&config.api_key, None);
+            let config = load_config_optional(cli.profile.as_deref());
+            let auto_cleanup_days = config.as_ref().map(|c| c.auto_cleanup_days).unwrap_or(7);
+            let cache_minutes = config.as_ref().map(|c| c.cache_minutes).unwrap_or(30);
+
             let shipments_path = pakket::config::shipments_path();
             let mut shipments = pakket::shipments::load(&shipments_path)?;
 
             let (cleaned, removed_count) =
-                pakket::shipments::cleanup(&shipments, config.auto_cleanup_days);
+                pakket::shipments::cleanup(&shipments, auto_cleanup_days);
             if removed_count > 0 {
                 output.print_message(&format!(
                     "Cleaned up {} delivered shipment(s)",
@@ -218,10 +327,46 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
             shipments = cleaned;
 
             for s in &mut shipments {
-                if (refresh || s.needs_refresh(config.cache_minutes))
-                    && let Ok(result) = client.track(&s.tracking_number).await
-                {
-                    s.update_from_result(&result);
+                if refresh || s.needs_refresh(cache_minutes) {
+                    let tracked = match pakket::carriers::detect_carrier(&s.tracking_number) {
+                        DetectedCarrier::PostNL => {
+                            if let Some(pc) = s
+                                .postcode
+                                .as_deref()
+                                .or_else(|| config.as_ref().and_then(|c| c.postcode.as_deref()))
+                            {
+                                let client = pakket::carriers::postnl::PostNL::new(None);
+                                client.track_with_postcode(&s.tracking_number, pc).await.ok()
+                            } else {
+                                None
+                            }
+                        }
+                        DetectedCarrier::DHL => {
+                            if let Some(key) =
+                                config.as_ref().and_then(|c| c.dhl_api_key.as_deref())
+                            {
+                                let client = pakket::carriers::dhl::Dhl::new(key, None);
+                                client.track(&s.tracking_number).await.ok()
+                            } else {
+                                None
+                            }
+                        }
+                        DetectedCarrier::Unknown => {
+                            if let Some(key) = config
+                                .as_ref()
+                                .and_then(|c| c.seventeen_track_api_key.as_deref())
+                            {
+                                let client =
+                                    pakket::carriers::seventeen::SeventeenTrack::new(key, None);
+                                client.track(&s.tracking_number).await.ok()
+                            } else {
+                                None
+                            }
+                        }
+                    };
+                    if let Some(result) = tracked {
+                        s.update_from_result(&result);
+                    }
                 }
             }
 
@@ -270,10 +415,12 @@ mod tests {
                 number,
                 history,
                 carrier,
+                postcode,
             } => {
                 assert_eq!(number, "TEST123");
                 assert!(!history);
                 assert!(carrier.is_none());
+                assert!(postcode.is_none());
             }
             _ => panic!("expected Track"),
         }
@@ -298,6 +445,16 @@ mod tests {
     }
 
     #[test]
+    fn cli_track_with_postcode() {
+        let cli =
+            Cli::try_parse_from(["pakket", "track", "3STEST123", "--postcode", "1234AB"]).unwrap();
+        match cli.command {
+            Command::Track { postcode, .. } => assert_eq!(postcode.as_deref(), Some("1234AB")),
+            _ => panic!("expected Track"),
+        }
+    }
+
+    #[test]
     fn cli_add() {
         let cli = Cli::try_parse_from(["pakket", "add", "Monitor", "TEST123"]).unwrap();
         match cli.command {
@@ -305,11 +462,30 @@ mod tests {
                 name,
                 number,
                 carrier,
+                postcode,
             } => {
                 assert_eq!(name, "Monitor");
                 assert_eq!(number, "TEST123");
                 assert!(carrier.is_none());
+                assert!(postcode.is_none());
             }
+            _ => panic!("expected Add"),
+        }
+    }
+
+    #[test]
+    fn cli_add_with_postcode() {
+        let cli = Cli::try_parse_from([
+            "pakket",
+            "add",
+            "Monitor",
+            "3STEST123",
+            "--postcode",
+            "9999ZZ",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::Add { postcode, .. } => assert_eq!(postcode.as_deref(), Some("9999ZZ")),
             _ => panic!("expected Add"),
         }
     }

@@ -3,10 +3,16 @@ use chrono::Utc;
 use crate::carriers::{TrackingResult, TrackingStatus};
 use crate::shipments::Shipment;
 
-pub fn create_shipment(name: &str, tracking_number: &str, result: &TrackingResult) -> Shipment {
+pub fn create_shipment(
+    name: &str,
+    tracking_number: &str,
+    postcode: Option<&str>,
+    result: &TrackingResult,
+) -> Shipment {
     Shipment {
         name: name.to_string(),
         tracking_number: tracking_number.to_string(),
+        postcode: postcode.map(String::from),
         carrier: result.carrier.clone(),
         added_at: Utc::now(),
         delivered_at: if result.status == TrackingStatus::Delivered {
@@ -36,10 +42,25 @@ mod tests {
             last_update: None,
             events: vec![],
         };
-        let shipment = create_shipment("My package", "TEST123", &result);
+        let shipment = create_shipment("My package", "TEST123", None, &result);
         assert_eq!(shipment.name, "My package");
         assert_eq!(shipment.tracking_number, "TEST123");
         assert_eq!(shipment.carrier, "DHL");
         assert_eq!(shipment.cached_status, TrackingStatus::InTransit);
+        assert!(shipment.postcode.is_none());
+    }
+
+    #[test]
+    fn create_shipment_with_postcode() {
+        let result = TrackingResult {
+            carrier: "PostNL".to_string(),
+            status: TrackingStatus::InTransit,
+            eta: None,
+            location: None,
+            last_update: None,
+            events: vec![],
+        };
+        let shipment = create_shipment("PostNL package", "3STEST123456789", Some("1234AB"), &result);
+        assert_eq!(shipment.postcode.as_deref(), Some("1234AB"));
     }
 }

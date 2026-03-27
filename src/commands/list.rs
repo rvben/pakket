@@ -65,6 +65,7 @@ mod tests {
         Shipment {
             name: name.to_string(),
             tracking_number: "TEST123".to_string(),
+            postcode: None,
             carrier: "DHL".to_string(),
             added_at: chrono::Utc::now(),
             delivered_at: None,

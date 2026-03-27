@@ -10,6 +10,7 @@ use crate::error::Error;
 pub struct Shipment {
     pub name: String,
     pub tracking_number: String,
+    pub postcode: Option<String>,
     pub carrier: String,
     pub added_at: DateTime<Utc>,
     pub delivered_at: Option<DateTime<Utc>>,
@@ -118,6 +119,7 @@ mod tests {
         Shipment {
             name: name.to_string(),
             tracking_number: "TEST123".to_string(),
+            postcode: None,
             carrier: "DHL".to_string(),
             added_at: chrono::Utc::now(),
             delivered_at: None,
