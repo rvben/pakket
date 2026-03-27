@@ -1,3 +1,5 @@
+pub mod dhl;
+pub mod postnl;
 pub mod seventeen;
 
 use serde::{Deserialize, Serialize};
@@ -38,6 +40,36 @@ pub trait Carrier: Send + Sync {
     ) -> impl std::future::Future<Output = Result<TrackingResult, Error>> + Send;
 }
 
+/// Detected carrier based on tracking number pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetectedCarrier {
+    PostNL,
+    DHL,
+    Unknown,
+}
+
+/// Auto-detect carrier from tracking number format.
+///
+/// PostNL barcodes start with 3S, LS, or RS.
+/// DHL barcodes start with JD, JVGL, or GM, or are long numeric strings (10+ digits).
+pub fn detect_carrier(tracking_number: &str) -> DetectedCarrier {
+    let upper = tracking_number.to_uppercase();
+
+    if upper.starts_with("3S") || upper.starts_with("LS") || upper.starts_with("RS") {
+        return DetectedCarrier::PostNL;
+    }
+
+    if upper.starts_with("JD") || upper.starts_with("JVGL") || upper.starts_with("GM") {
+        return DetectedCarrier::DHL;
+    }
+
+    if tracking_number.len() >= 10 && tracking_number.chars().all(|c| c.is_ascii_digit()) {
+        return DetectedCarrier::DHL;
+    }
+
+    DetectedCarrier::Unknown
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,6 +85,34 @@ mod tests {
     fn tracking_status_deserialize() {
         let status: TrackingStatus = serde_json::from_str("\"Delivered\"").unwrap();
         assert_eq!(status, TrackingStatus::Delivered);
+    }
+
+    #[test]
+    fn detect_postnl_3s() {
+        assert_eq!(detect_carrier("3SDEVC123456789"), DetectedCarrier::PostNL);
+    }
+
+    #[test]
+    fn detect_postnl_ls() {
+        assert_eq!(detect_carrier("LS123456789NL"), DetectedCarrier::PostNL);
+    }
+
+    #[test]
+    fn detect_dhl_numeric() {
+        assert_eq!(
+            detect_carrier("00340434161094015063"),
+            DetectedCarrier::DHL
+        );
+    }
+
+    #[test]
+    fn detect_dhl_jvgl() {
+        assert_eq!(detect_carrier("JVGL1234567890"), DetectedCarrier::DHL);
+    }
+
+    #[test]
+    fn detect_unknown() {
+        assert_eq!(detect_carrier("ABCXYZ"), DetectedCarrier::Unknown);
     }
 
     #[test]
