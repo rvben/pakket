@@ -99,6 +99,56 @@ async fn main() {
     }
 }
 
+/// Track a number using the best available backend.
+/// Priority: 17track (if configured) > carrier-specific > error.
+async fn track_number(
+    number: &str,
+    postcode: Option<&str>,
+    config: &Option<pakket::config::Config>,
+) -> Result<pakket::carriers::TrackingResult, Error> {
+    // 17track first — universal backend, handles all carriers
+    if let Some(key) = config.as_ref().and_then(|c| c.seventeen_track_api_key.as_ref()) {
+        let client = pakket::carriers::seventeen::SeventeenTrack::new(key, None);
+        return client.track(number).await;
+    }
+
+    // Fall back to carrier-specific backends
+    let detected = pakket::carriers::detect_carrier(number);
+    match detected {
+        DetectedCarrier::PostNL => {
+            let pc = postcode
+                .or_else(|| config.as_ref().and_then(|c| c.postcode.as_deref()))
+                .ok_or_else(|| {
+                    Error::Config("PostNL requires --postcode or postcode in config".to_string())
+                })?;
+            let client = pakket::carriers::postnl::PostNL::new(None);
+            client.track_with_postcode(number, pc).await
+        }
+        DetectedCarrier::DHL => {
+            let api_key = config
+                .as_ref()
+                .and_then(|c| c.dhl_api_key.as_ref())
+                .ok_or_else(|| {
+                    Error::Config("DHL requires dhl_api_key in config (free at developer.dhl.com)".to_string())
+                })?;
+            let client = pakket::carriers::dhl::Dhl::new(api_key, None);
+            client.track(number).await
+        }
+        DetectedCarrier::Unknown => Err(Error::Config(
+            "Unknown carrier. Configure seventeen_track_api_key for universal tracking, or dhl_api_key / postcode for direct backends".to_string(),
+        )),
+    }
+}
+
+/// Try tracking a number, returning None on failure (for list refresh).
+async fn try_track_number(
+    number: &str,
+    postcode: Option<&str>,
+    config: &Option<pakket::config::Config>,
+) -> Option<pakket::carriers::TrackingResult> {
+    track_number(number, postcode, config).await.ok()
+}
+
 async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error> {
     match cli.command {
         Command::Schema => {
@@ -201,44 +251,7 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
             postcode,
         } => {
             let config = load_config_optional(cli.profile.as_deref());
-            let postcode = postcode.or_else(|| config.as_ref().and_then(|c| c.postcode.clone()));
-
-            let detected = pakket::carriers::detect_carrier(&number);
-            let result = match detected {
-                DetectedCarrier::PostNL => {
-                    let pc = postcode.ok_or_else(|| {
-                        Error::Config(
-                            "PostNL requires --postcode or postcode in config".to_string(),
-                        )
-                    })?;
-                    let client = pakket::carriers::postnl::PostNL::new(None);
-                    client.track_with_postcode(&number, &pc).await?
-                }
-                DetectedCarrier::DHL => {
-                    let api_key = config
-                        .as_ref()
-                        .and_then(|c| c.dhl_api_key.as_ref())
-                        .ok_or_else(|| {
-                            Error::Config("DHL requires dhl_api_key in config".to_string())
-                        })?;
-                    let client = pakket::carriers::dhl::Dhl::new(api_key, None);
-                    client.track(&number).await?
-                }
-                DetectedCarrier::Unknown => {
-                    let api_key = config
-                        .as_ref()
-                        .and_then(|c| c.seventeen_track_api_key.as_ref())
-                        .ok_or_else(|| {
-                            Error::Config(
-                                "Unknown carrier. Configure seventeen_track_api_key for universal tracking"
-                                    .to_string(),
-                            )
-                        })?;
-                    let client = pakket::carriers::seventeen::SeventeenTrack::new(api_key, None);
-                    client.track(&number).await?
-                }
-            };
-
+            let result = track_number(&number, postcode.as_deref(), &config).await?;
             pakket::commands::track::print_result(&output, &result, history);
             Ok(())
         }
@@ -250,42 +263,7 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
         } => {
             let config = load_config_optional(cli.profile.as_deref());
             let postcode = postcode.or_else(|| config.as_ref().and_then(|c| c.postcode.clone()));
-
-            let detected = pakket::carriers::detect_carrier(&number);
-            let result = match detected {
-                DetectedCarrier::PostNL => {
-                    let pc = postcode.as_deref().ok_or_else(|| {
-                        Error::Config(
-                            "PostNL requires --postcode or postcode in config".to_string(),
-                        )
-                    })?;
-                    let client = pakket::carriers::postnl::PostNL::new(None);
-                    client.track_with_postcode(&number, pc).await?
-                }
-                DetectedCarrier::DHL => {
-                    let api_key = config
-                        .as_ref()
-                        .and_then(|c| c.dhl_api_key.as_ref())
-                        .ok_or_else(|| {
-                            Error::Config("DHL requires dhl_api_key in config".to_string())
-                        })?;
-                    let client = pakket::carriers::dhl::Dhl::new(api_key, None);
-                    client.track(&number).await?
-                }
-                DetectedCarrier::Unknown => {
-                    let api_key = config
-                        .as_ref()
-                        .and_then(|c| c.seventeen_track_api_key.as_ref())
-                        .ok_or_else(|| {
-                            Error::Config(
-                                "Unknown carrier. Configure seventeen_track_api_key for universal tracking"
-                                    .to_string(),
-                            )
-                        })?;
-                    let client = pakket::carriers::seventeen::SeventeenTrack::new(api_key, None);
-                    client.track(&number).await?
-                }
-            };
+            let result = track_number(&number, postcode.as_deref(), &config).await?;
 
             let shipment = pakket::commands::add::create_shipment(
                 &name,
@@ -328,43 +306,13 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
 
             for s in &mut shipments {
                 if refresh || s.needs_refresh(cache_minutes) {
-                    let tracked = match pakket::carriers::detect_carrier(&s.tracking_number) {
-                        DetectedCarrier::PostNL => {
-                            if let Some(pc) = s
-                                .postcode
-                                .as_deref()
-                                .or_else(|| config.as_ref().and_then(|c| c.postcode.as_deref()))
-                            {
-                                let client = pakket::carriers::postnl::PostNL::new(None);
-                                client.track_with_postcode(&s.tracking_number, pc).await.ok()
-                            } else {
-                                None
-                            }
-                        }
-                        DetectedCarrier::DHL => {
-                            if let Some(key) =
-                                config.as_ref().and_then(|c| c.dhl_api_key.as_deref())
-                            {
-                                let client = pakket::carriers::dhl::Dhl::new(key, None);
-                                client.track(&s.tracking_number).await.ok()
-                            } else {
-                                None
-                            }
-                        }
-                        DetectedCarrier::Unknown => {
-                            if let Some(key) = config
-                                .as_ref()
-                                .and_then(|c| c.seventeen_track_api_key.as_deref())
-                            {
-                                let client =
-                                    pakket::carriers::seventeen::SeventeenTrack::new(key, None);
-                                client.track(&s.tracking_number).await.ok()
-                            } else {
-                                None
-                            }
-                        }
-                    };
-                    if let Some(result) = tracked {
+                    let pc = s
+                        .postcode
+                        .as_deref()
+                        .or_else(|| config.as_ref().and_then(|c| c.postcode.as_deref()));
+                    if let Some(result) =
+                        try_track_number(&s.tracking_number, pc, &config).await
+                    {
                         s.update_from_result(&result);
                     }
                 }
