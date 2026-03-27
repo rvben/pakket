@@ -60,40 +60,55 @@ impl PostNL {
 }
 
 fn parse_postnl_shipment(shipment: &serde_json::Value) -> Result<TrackingResult, Error> {
+    // Status from statusPhase.index
     let status_phase = shipment
-        .pointer("/status/phase")
+        .pointer("/statusPhase/index")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
 
     let status = map_postnl_status(status_phase);
 
+    // ETA from eta.start (time window)
     let eta = shipment
-        .pointer("/delivery/deliveryDate")
+        .pointer("/eta/start")
         .and_then(|v| v.as_str())
-        .map(String::from);
+        .or_else(|| shipment.get("deliveryDate").and_then(|v| v.as_str()))
+        .map(|s| {
+            // Extract just the date part if it's a full timestamp
+            if let Some(t_pos) = s.find('T') {
+                s[..t_pos].to_string()
+            } else {
+                s.to_string()
+            }
+        });
 
+    // Events from observations array
     let events: Vec<TrackingEvent> = shipment
-        .get("events")
+        .get("observations")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
                 .filter_map(|e| {
                     Some(TrackingEvent {
-                        date: e.get("dateTime")?.as_str()?.to_string(),
-                        location: e
-                            .get("location")
-                            .and_then(|l| l.as_str())
-                            .unwrap_or("-")
-                            .to_string(),
-                        description: e.pointer("/status/description")?.as_str()?.to_string(),
+                        date: e.get("observationDate")?.as_str()?.to_string(),
+                        location: "-".to_string(),
+                        description: e.get("description")?.as_str()?.to_string(),
                     })
                 })
                 .collect()
         })
         .unwrap_or_default();
 
-    let location = events.first().map(|e| e.location.clone());
-    let last_update = events.first().map(|e| e.date.clone());
+    // Location from recipient address
+    let location = shipment
+        .pointer("/recipient/address/town")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    let last_update = shipment
+        .get("lastObservation")
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
     Ok(TrackingResult {
         carrier: "PostNL".to_string(),
@@ -105,8 +120,8 @@ fn parse_postnl_shipment(shipment: &serde_json::Value) -> Result<TrackingResult,
     })
 }
 
-/// PostNL status phases:
-/// 1 = Announced, 2 = In transit, 3 = Out for delivery, 4 = Delivered, 99 = Exception
+/// PostNL statusPhase.index:
+/// 1 = Announced, 2 = In transit, 3 = Out for delivery, 4 = Delivered
 fn map_postnl_status(phase: i64) -> TrackingStatus {
     match phase {
         1 => TrackingStatus::Pending,
@@ -128,18 +143,40 @@ mod tests {
             "colli": {
                 "3STEST123456789": {
                     "barcode": "3STEST123456789",
-                    "status": { "phase": 2, "description": "In transit" },
-                    "delivery": { "deliveryDate": "2026-03-28" },
-                    "events": [
+                    "statusPhase": { "index": 4, "message": "Shipment delivered" },
+                    "isDelivered": true,
+                    "deliveryDate": "2026-03-26T18:32:01+01:00",
+                    "eta": {
+                        "type": "Specific",
+                        "start": "2026-03-26T17:45:00+01:00",
+                        "end": "2026-03-26T18:45:00+01:00"
+                    },
+                    "recipient": {
+                        "names": { "personName": "Test User" },
+                        "address": {
+                            "street": "Teststraat",
+                            "houseNumber": "1",
+                            "postalCode": "1234AB",
+                            "town": "AMSTERDAM",
+                            "country": "NL"
+                        }
+                    },
+                    "lastObservation": "2026-03-26T18:32:01+01:00",
+                    "observations": [
                         {
-                            "status": { "description": "Arrived at sorting center" },
-                            "dateTime": "2026-03-27T14:30:00",
-                            "location": "Amsterdam"
+                            "observationDate": "2026-03-26T17:13:59+01:00",
+                            "observationCode": "J05",
+                            "description": "Driver is en route"
                         },
                         {
-                            "status": { "description": "Shipment picked up" },
-                            "dateTime": "2026-03-26T10:00:00",
-                            "location": "Rotterdam"
+                            "observationDate": "2026-03-26T09:06:30+01:00",
+                            "observationCode": "J01",
+                            "description": "Shipment has been sorted"
+                        },
+                        {
+                            "observationDate": "2026-03-26T09:05:40+01:00",
+                            "observationCode": "B01",
+                            "description": "Shipment received by PostNL"
                         }
                     ]
                 }
@@ -165,10 +202,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.carrier, "PostNL");
-        assert_eq!(result.status, TrackingStatus::InTransit);
-        assert_eq!(result.eta, Some("2026-03-28".to_string()));
-        assert_eq!(result.events.len(), 2);
-        assert_eq!(result.location, Some("Amsterdam".to_string()));
+        assert_eq!(result.status, TrackingStatus::Delivered);
+        assert_eq!(result.eta, Some("2026-03-26".to_string()));
+        assert_eq!(result.events.len(), 3);
+        assert_eq!(result.location, Some("AMSTERDAM".to_string()));
+        assert!(result.last_update.is_some());
     }
 
     #[tokio::test]
