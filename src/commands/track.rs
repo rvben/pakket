@@ -23,7 +23,7 @@ pub fn print_result(output: &OutputConfig, result: &TrackingResult, show_history
 
 fn print_table_header() {
     let header = format!(
-        "{:<10}{:<14}{:<9}{:<22}{}",
+        "{:<12}  {:<16}  {:<12}  {:<20}  {}",
         "CARRIER", "STATUS", "ETA", "LOCATION", "LAST UPDATE"
     );
     if use_color() {
@@ -34,19 +34,24 @@ fn print_table_header() {
 }
 
 pub fn format_table_row(result: &TrackingResult) -> String {
+    let carrier = &result.carrier;
+    let eta = result.eta.as_deref().unwrap_or("-");
+    let location = result.location.as_deref().unwrap_or("-");
+    let last_update = format_timestamp(result.last_update.as_deref().unwrap_or("-"));
+
+    // Pad the status label before colorizing to avoid ANSI escapes breaking alignment
+    let status_label = format_status(&result.status);
+    let status_padded = pad_colored(&status_label, 16);
+
     format!(
-        "{:<10}{:<14}{:<9}{:<22}{}",
-        result.carrier,
-        format_status(&result.status),
-        result.eta.as_deref().unwrap_or("-"),
-        result.location.as_deref().unwrap_or("-"),
-        result.last_update.as_deref().unwrap_or("-"),
+        "{:<12}  {}  {:<12}  {:<20}  {}",
+        carrier, status_padded, eta, location, last_update
     )
 }
 
 pub fn format_history(events: &[TrackingEvent]) -> String {
     let mut out = String::new();
-    let header = format!("{:<18}{:<22}{}", "DATE", "LOCATION", "EVENT");
+    let header = format!("{:<22}  {:<20}  {}", "DATE", "LOCATION", "EVENT");
     if use_color() {
         out.push_str(&format!("{}\n", header.bold()));
     } else {
@@ -54,11 +59,53 @@ pub fn format_history(events: &[TrackingEvent]) -> String {
     }
     for event in events {
         out.push_str(&format!(
-            "{:<18}{:<22}{}\n",
-            event.date, event.location, event.description
+            "{:<22}  {:<20}  {}\n",
+            format_timestamp(&event.date),
+            event.location,
+            event.description
         ));
     }
     out.trim_end().to_string()
+}
+
+/// Shorten ISO timestamps to a readable format (2026-03-26 18:32)
+fn format_timestamp(ts: &str) -> String {
+    if ts == "-" {
+        return "-".to_string();
+    }
+    // "2026-03-26T18:32:01+01:00" → "2026-03-26 18:32"
+    ts.replace('T', " ")
+        .chars()
+        .take(16)
+        .collect()
+}
+
+/// Pad a string that may contain ANSI escape codes to a visible width
+pub fn pad_colored(s: &str, width: usize) -> String {
+    let visible_len = strip_ansi_len(s);
+    if visible_len >= width {
+        s.to_string()
+    } else {
+        format!("{}{}", s, " ".repeat(width - visible_len))
+    }
+}
+
+/// Count visible characters (strip ANSI escape sequences)
+fn strip_ansi_len(s: &str) -> usize {
+    let mut len = 0;
+    let mut in_escape = false;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if c == 'm' {
+                in_escape = false;
+            }
+        } else {
+            len += 1;
+        }
+    }
+    len
 }
 
 #[cfg(test)]
@@ -70,17 +117,17 @@ mod tests {
         TrackingResult {
             carrier: "DHL".to_string(),
             status: TrackingStatus::InTransit,
-            eta: Some("Mar 28".to_string()),
+            eta: Some("2026-03-28".to_string()),
             location: Some("Amsterdam, NL".to_string()),
-            last_update: Some("2026-03-26 14:30".to_string()),
+            last_update: Some("2026-03-26T14:30:00+01:00".to_string()),
             events: vec![
                 TrackingEvent {
-                    date: "2026-03-26 14:30".to_string(),
+                    date: "2026-03-26T14:30:00+01:00".to_string(),
                     location: "Amsterdam, NL".to_string(),
                     description: "Arrived at sorting center".to_string(),
                 },
                 TrackingEvent {
-                    date: "2026-03-25 20:15".to_string(),
+                    date: "2026-03-25T20:15:00+01:00".to_string(),
                     location: "Frankfurt, DE".to_string(),
                     description: "Departed facility".to_string(),
                 },
@@ -94,7 +141,7 @@ mod tests {
         let row = format_table_row(&result);
         assert!(row.contains("DHL"));
         assert!(row.contains("Amsterdam, NL"));
-        assert!(row.contains("Mar 28"));
+        assert!(row.contains("2026-03-28"));
     }
 
     #[test]
@@ -111,5 +158,32 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("InTransit"));
         assert!(json.contains("DHL"));
+    }
+
+    #[test]
+    fn format_timestamp_shortens_iso() {
+        assert_eq!(format_timestamp("2026-03-26T18:32:01+01:00"), "2026-03-26 18:32");
+    }
+
+    #[test]
+    fn format_timestamp_dash() {
+        assert_eq!(format_timestamp("-"), "-");
+    }
+
+    #[test]
+    fn strip_ansi_len_plain() {
+        assert_eq!(strip_ansi_len("Delivered"), 9);
+    }
+
+    #[test]
+    fn strip_ansi_len_colored() {
+        let colored = "Delivered".green().to_string();
+        assert_eq!(strip_ansi_len(&colored), 9);
+    }
+
+    #[test]
+    fn pad_colored_works() {
+        let plain = "test";
+        assert_eq!(pad_colored(plain, 10), "test      ");
     }
 }

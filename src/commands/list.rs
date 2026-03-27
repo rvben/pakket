@@ -1,4 +1,5 @@
-use crate::output::{OutputConfig, format_status, use_color};
+use crate::commands::track::pad_colored;
+use crate::output::{format_status, use_color, OutputConfig};
 use crate::shipments::Shipment;
 use owo_colors::OwoColorize;
 
@@ -32,7 +33,7 @@ pub fn print_list(output: &OutputConfig, shipments: &[Shipment], show_history: b
 
 fn print_list_header() {
     let header = format!(
-        "{:<18}{:<10}{:<14}{:<9}{:<22}{}",
+        "{:<18}  {:<12}  {:<16}  {:<12}  {:<20}  {}",
         "NAME", "CARRIER", "STATUS", "ETA", "LOCATION", "LAST UPDATE"
     );
     if use_color() {
@@ -43,15 +44,17 @@ fn print_list_header() {
 }
 
 pub fn format_list_row(s: &Shipment) -> String {
+    let status_padded = pad_colored(&format_status(&s.cached_status), 16);
+
     format!(
-        "{:<18}{:<10}{:<14}{:<9}{:<22}{}",
+        "{:<18}  {:<12}  {}  {:<12}  {:<20}  {}",
         s.name,
         s.carrier,
-        format_status(&s.cached_status),
+        status_padded,
         s.cached_eta.as_deref().unwrap_or("-"),
         s.cached_location.as_deref().unwrap_or("-"),
         s.last_fetch
-            .map(|t| t.format("%b %d %H:%M").to_string())
+            .map(|t| t.format("%Y-%m-%d %H:%M").to_string())
             .unwrap_or_else(|| "-".to_string()),
     )
 }
@@ -71,7 +74,7 @@ mod tests {
             delivered_at: None,
             last_fetch: Some(chrono::Utc::now()),
             cached_status: status,
-            cached_eta: Some("Mar 28".to_string()),
+            cached_eta: Some("2026-03-28".to_string()),
             cached_location: Some("Amsterdam".to_string()),
             cached_events: vec![],
         }
