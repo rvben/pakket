@@ -101,6 +101,7 @@ async fn main() {
 
 /// Track a number using the best available backend.
 /// Priority: 17track (if configured) > carrier-specific > error.
+/// Falls back to carrier-specific if 17track returns Pending.
 async fn track_number(
     number: &str,
     postcode: Option<&str>,
@@ -109,10 +110,31 @@ async fn track_number(
     // 17track first — universal backend, handles all carriers
     if let Some(key) = config.as_ref().and_then(|c| c.seventeen_track_api_key.as_ref()) {
         let client = pakket::carriers::seventeen::SeventeenTrack::new(key, None);
-        return client.track(number).await;
+        let result = client.track(number).await?;
+
+        // If 17track has real data, use it
+        if result.status != pakket::carriers::TrackingStatus::Pending {
+            return Ok(result);
+        }
+
+        // 17track returned Pending — try carrier-specific for immediate data
+        if let Ok(direct) = track_carrier_direct(number, postcode, config).await {
+            return Ok(direct);
+        }
+
+        // No direct backend available, return the 17track Pending result
+        return Ok(result);
     }
 
-    // Fall back to carrier-specific backends
+    track_carrier_direct(number, postcode, config).await
+}
+
+/// Try carrier-specific backends based on tracking number detection.
+async fn track_carrier_direct(
+    number: &str,
+    postcode: Option<&str>,
+    config: &Option<pakket::config::Config>,
+) -> Result<pakket::carriers::TrackingResult, Error> {
     let detected = pakket::carriers::detect_carrier(number);
     match detected {
         DetectedCarrier::PostNL => {
@@ -129,7 +151,10 @@ async fn track_number(
                 .as_ref()
                 .and_then(|c| c.dhl_api_key.as_ref())
                 .ok_or_else(|| {
-                    Error::Config("DHL requires dhl_api_key in config (free at developer.dhl.com)".to_string())
+                    Error::Config(
+                        "DHL requires dhl_api_key in config (free at developer.dhl.com)"
+                            .to_string(),
+                    )
                 })?;
             let client = pakket::carriers::dhl::Dhl::new(api_key, None);
             client.track(number).await
