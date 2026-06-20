@@ -180,9 +180,7 @@ async fn try_track_number(
 async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error> {
     match cli.command {
         Command::Schema => {
-            use clap::CommandFactory;
-            let cmd = Cli::command();
-            let schema = pakket::schema::generate(&cmd);
+            let schema = pakket::schema::generate();
             println!(
                 "{}",
                 serde_json::to_string_pretty(&schema).expect("serialize")
