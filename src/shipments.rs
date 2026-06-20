@@ -136,7 +136,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("shipments.json");
         let s = sample_shipment("Test package");
-        save(&path, &[s.clone()]).unwrap();
+        save(&path, std::slice::from_ref(&s)).unwrap();
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].name, "Test package");

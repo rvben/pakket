@@ -74,10 +74,7 @@ fn format_timestamp(ts: &str) -> String {
         return "-".to_string();
     }
     // "2026-03-26T18:32:01+01:00" → "2026-03-26 18:32"
-    ts.replace('T', " ")
-        .chars()
-        .take(16)
-        .collect()
+    ts.replace('T', " ").chars().take(16).collect()
 }
 
 /// Pad a string that may contain ANSI escape codes to a visible width
@@ -162,7 +159,10 @@ mod tests {
 
     #[test]
     fn format_timestamp_shortens_iso() {
-        assert_eq!(format_timestamp("2026-03-26T18:32:01+01:00"), "2026-03-26 18:32");
+        assert_eq!(
+            format_timestamp("2026-03-26T18:32:01+01:00"),
+            "2026-03-26 18:32"
+        );
     }
 
     #[test]

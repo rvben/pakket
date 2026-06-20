@@ -99,10 +99,7 @@ mod tests {
 
     #[test]
     fn detect_dhl_numeric() {
-        assert_eq!(
-            detect_carrier("00340434161094015063"),
-            DetectedCarrier::DHL
-        );
+        assert_eq!(detect_carrier("00340434161094015063"), DetectedCarrier::DHL);
     }
 
     #[test]

@@ -28,12 +28,7 @@ impl PostNL {
             self.base_url, barcode, postcode
         );
 
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(Error::Http)?;
+        let resp = self.client.get(&url).send().await.map_err(Error::Http)?;
 
         if !resp.status().is_success() {
             return Err(Error::Api(format!("PostNL API error: {}", resp.status())));

@@ -108,7 +108,10 @@ async fn track_number(
     config: &Option<pakket::config::Config>,
 ) -> Result<pakket::carriers::TrackingResult, Error> {
     // 17track first — universal backend, handles all carriers
-    if let Some(key) = config.as_ref().and_then(|c| c.seventeen_track_api_key.as_ref()) {
+    if let Some(key) = config
+        .as_ref()
+        .and_then(|c| c.seventeen_track_api_key.as_ref())
+    {
         let client = pakket::carriers::seventeen::SeventeenTrack::new(key, None);
         let result = client.track(number).await?;
 
@@ -361,9 +364,7 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
                         .postcode
                         .as_deref()
                         .or_else(|| config.as_ref().and_then(|c| c.postcode.as_deref()));
-                    if let Some(result) =
-                        try_track_number(&s.tracking_number, pc, &config).await
-                    {
+                    if let Some(result) = try_track_number(&s.tracking_number, pc, &config).await {
                         s.update_from_result(&result);
                     }
                 }

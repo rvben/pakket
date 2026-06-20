@@ -1,5 +1,5 @@
 use crate::commands::track::pad_colored;
-use crate::output::{format_status, use_color, OutputConfig};
+use crate::output::{OutputConfig, format_status, use_color};
 use crate::shipments::Shipment;
 use owo_colors::OwoColorize;
 

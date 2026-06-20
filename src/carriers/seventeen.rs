@@ -354,6 +354,9 @@ mod tests {
         assert_eq!(map_status("DeliveryFailure"), TrackingStatus::Exception);
         assert_eq!(map_status("InfoReceived"), TrackingStatus::Pending);
         assert_eq!(map_status("NotFound"), TrackingStatus::Pending);
-        assert_eq!(map_status("AvailableForPickup"), TrackingStatus::OutForDelivery);
+        assert_eq!(
+            map_status("AvailableForPickup"),
+            TrackingStatus::OutForDelivery
+        );
     }
 }

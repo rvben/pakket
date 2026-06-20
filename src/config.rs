@@ -64,14 +64,12 @@ impl Config {
             .and_then(|v| v.as_str())
             .map(String::from);
 
-        let dhl_api_key = env_dhl_api_key
-            .map(String::from)
-            .or_else(|| {
-                section
-                    .get("dhl_api_key")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            });
+        let dhl_api_key = env_dhl_api_key.map(String::from).or_else(|| {
+            section
+                .get("dhl_api_key")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        });
 
         // Support both `seventeen_track_api_key` and the legacy `api_key` field name.
         let file_seventeen_key = section
@@ -80,9 +78,7 @@ impl Config {
             .and_then(|v| v.as_str())
             .map(String::from);
 
-        let seventeen_track_api_key = env_api_key
-            .map(String::from)
-            .or(file_seventeen_key);
+        let seventeen_track_api_key = env_api_key.map(String::from).or(file_seventeen_key);
 
         let auto_cleanup_days = section
             .get("auto_cleanup_days")
@@ -196,7 +192,10 @@ cache_minutes = 30
         std::fs::write(&path, "[default]\napi_key = \"legacy-key\"\n").unwrap();
 
         let config = Config::load_from(&path, None).unwrap();
-        assert_eq!(config.seventeen_track_api_key.as_deref(), Some("legacy-key"));
+        assert_eq!(
+            config.seventeen_track_api_key.as_deref(),
+            Some("legacy-key")
+        );
     }
 
     #[test]

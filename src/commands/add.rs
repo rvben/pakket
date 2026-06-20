@@ -60,7 +60,8 @@ mod tests {
             last_update: None,
             events: vec![],
         };
-        let shipment = create_shipment("PostNL package", "3STEST123456789", Some("1234AB"), &result);
+        let shipment =
+            create_shipment("PostNL package", "3STEST123456789", Some("1234AB"), &result);
         assert_eq!(shipment.postcode.as_deref(), Some("1234AB"));
     }
 }
