@@ -123,6 +123,10 @@ jobs:
         env:
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
+          if [ -z "$HOMEBREW_TAP_DEPLOY_KEY" ]; then
+            echo "HOMEBREW_TAP_DEPLOY_KEY not set; skipping Homebrew formula update."
+            exit 0
+          fi
           # Authenticate to the tap with a write deploy key. The key never
           # expires and is scoped to rvben/homebrew-tap only, so cross-repo
           # pushes keep working without periodic token rotation.
