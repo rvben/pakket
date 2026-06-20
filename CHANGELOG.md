@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+
+## [0.1.1](https://github.com/rvben/pakket/compare/v0.1.0...v0.1.1) - 2026-06-20
+
+### Added
+
+- **schema**: adopt clispec v0.2 contract ([8d9cae9](https://github.com/rvben/pakket/commit/8d9cae975c615fcc5837f68f66fcd0f8119d4769))
+
 ## [0.1.0] - 2026-06-20
 
 ### Added
