@@ -25,6 +25,20 @@ pub enum Error {
 }
 
 impl Error {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Error::Config(_) => "config",
+            Error::Api(_) => "api",
+            Error::NotFound(_) => "not_found",
+            Error::Http(_) => "http",
+            Error::Other(_) => "general",
+        }
+    }
+
+    pub fn retryable(&self) -> bool {
+        matches!(self, Error::Api(_) | Error::Http(_))
+    }
+
     pub fn exit_code(&self) -> i32 {
         match self {
             Error::Config(_) => exit_codes::CONFIG_ERROR,

@@ -1,6 +1,7 @@
+use std::io::IsTerminal;
 use std::process;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
 use pakket::carriers::{Carrier, DetectedCarrier};
@@ -9,16 +10,40 @@ use pakket::error::Error;
 #[derive(Parser)]
 #[command(name = "pakket", version, about = "CLI for tracking shipments")]
 struct Cli {
+    /// Output format; auto selects text on a terminal and JSON when piped.
+    #[arg(short = 'o', long, global = true, value_enum, default_value_t = CliOutput::Auto)]
+    output: CliOutput,
+
     /// Output as JSON
-    #[arg(long, global = true)]
+    #[arg(long, global = true, conflicts_with = "output")]
     json: bool,
 
     /// Configuration profile
     #[arg(long, env = "PAKKET_PROFILE", global = true)]
     profile: Option<String>,
 
+    /// Maximum saved shipments to return from list.
+    #[arg(long, global = true)]
+    limit: Option<usize>,
+
+    /// Saved shipments to skip before returning list results.
+    #[arg(long, global = true, default_value_t = 0)]
+    offset: usize,
+
+    /// Comma-separated fields to include in JSON list results.
+    #[arg(long, global = true, value_delimiter = ',')]
+    fields: Vec<String>,
+
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Clone, Copy, Default, ValueEnum)]
+enum CliOutput {
+    #[default]
+    Auto,
+    Json,
+    Text,
 }
 
 #[derive(Subcommand)]
@@ -90,11 +115,44 @@ fn load_config_optional(profile: Option<&str>) -> Option<pakket::config::Config>
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
-    let output = pakket::output::OutputConfig::new(cli.json);
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(error) => {
+            use clap::error::ErrorKind;
+            if matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) {
+                let _ = error.print();
+                return;
+            }
+            let message = error
+                .to_string()
+                .lines()
+                .next()
+                .unwrap_or("invalid arguments")
+                .trim_start_matches("error: ")
+                .to_string();
+            eprintln!(
+                "{}",
+                serde_json::json!({"error":{"kind":"usage","message":message,"retryable":false}})
+            );
+            process::exit(2);
+        }
+    };
+    let json = cli.json
+        || match cli.output {
+            CliOutput::Auto => !std::io::stdout().is_terminal(),
+            CliOutput::Json => true,
+            CliOutput::Text => false,
+        };
+    let output = pakket::output::OutputConfig { json };
 
     if let Err(e) = run(cli, output).await {
-        eprintln!("Error: {e}");
+        eprintln!(
+            "{}",
+            serde_json::json!({"error":{"kind":e.kind(),"message":e.to_string(),"retryable":e.retryable()}})
+        );
         process::exit(e.exit_code());
     }
 }
@@ -269,27 +327,22 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
         }
         Command::Config(ConfigCommand::Show) => {
             let path = pakket::config::config_path();
+            let contents = std::fs::read_to_string(&path).ok();
+            let masked = contents.as_deref().map(mask_config).unwrap_or_default();
+            if output.json {
+                println!(
+                    "{}",
+                    serde_json::json!({"path":path,"exists":contents.is_some(),"contents":masked})
+                );
+                return Ok(());
+            }
             println!("Config file: {}", path.display());
             println!();
-            match std::fs::read_to_string(&path) {
-                Ok(contents) => {
-                    for line in contents.lines() {
-                        let trimmed = line.trim_start();
-                        if trimmed.starts_with("api_key")
-                            || trimmed.starts_with("dhl_api_key")
-                            || trimmed.starts_with("seventeen_track_api_key")
-                        {
-                            if let Some((key, _)) = line.split_once('=') {
-                                println!("{key}= \"****\"");
-                            } else {
-                                println!("{line}");
-                            }
-                        } else {
-                            println!("{line}");
-                        }
-                    }
+            match contents {
+                Some(_) => {
+                    println!("{masked}");
                 }
-                Err(_) => {
+                None => {
                     println!("No config file found.");
                     println!("Run 'pakket config init' to create one.");
                 }
@@ -369,7 +422,32 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
             }
 
             pakket::shipments::save(&shipments_path, &shipments)?;
-            pakket::commands::list::print_list(&output, &shipments, history);
+            let shipments: Vec<_> = shipments
+                .into_iter()
+                .skip(cli.offset)
+                .take(cli.limit.unwrap_or(usize::MAX))
+                .collect();
+            if output.json && !cli.fields.is_empty() {
+                let projected: Vec<_> = shipments
+                    .iter()
+                    .map(|shipment| {
+                        let value = serde_json::to_value(shipment).expect("serialize shipment");
+                        let mut object = serde_json::Map::new();
+                        for field in &cli.fields {
+                            if let Some(value) = value.get(field) {
+                                object.insert(field.clone(), value.clone());
+                            }
+                        }
+                        serde_json::Value::Object(object)
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&projected).expect("serialize")
+                );
+            } else {
+                pakket::commands::list::print_list(&output, &shipments, history);
+            }
             Ok(())
         }
         Command::Remove { name } => {
@@ -398,6 +476,26 @@ async fn run(cli: Cli, output: pakket::output::OutputConfig) -> Result<(), Error
             }
         }
     }
+}
+
+fn mask_config(contents: &str) -> String {
+    contents
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("api_key")
+                || trimmed.starts_with("dhl_api_key")
+                || trimmed.starts_with("seventeen_track_api_key")
+            {
+                line.split_once('=')
+                    .map(|(key, _)| format!("{key}= \"****\""))
+                    .unwrap_or_else(|| line.to_string())
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
