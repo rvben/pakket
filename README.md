@@ -58,3 +58,8 @@ Delivered shipments are cleaned up automatically after a configurable number of 
 ## Agent integration
 
 `pakket schema` prints the full machine-readable contract (commands, arguments, output fields, exit codes) following clispec v0.2.
+
+## Releasing
+
+Vership owns versioning, changelog generation, release commits, and tags. See
+[the release runbook](docs/releases.md) for the verified workflow and recovery policy.
