@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.1.3](https://github.com/rvben/pakket/compare/v0.1.2...v0.1.3) - 2026-09-27
+
+### Fixed
+
+- **deps**: update rustls to 0.23.45 for RUSTSEC-2026-0285 ([963488a](https://github.com/rvben/pakket/commit/963488ae284db8a311990975e9702d2b2d00ec13))
+- **ci**: install pinned Rust components ([61e39c1](https://github.com/rvben/pakket/commit/61e39c1376a8943c367ecb106e727cd50d4b18a7))
 
 ## [0.1.1](https://github.com/rvben/pakket/compare/v0.1.0...v0.1.1) - 2026-06-20
 
