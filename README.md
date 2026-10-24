@@ -6,6 +6,14 @@ Track shipments from the command line.
 
 ## Install
 
+### Homebrew
+
+```sh
+brew install rvben/tap/pakket
+```
+
+### Other installation methods
+
 ```sh
 cargo install pakket
 ```
