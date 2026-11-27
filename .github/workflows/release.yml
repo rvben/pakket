@@ -182,7 +182,7 @@ jobs:
 
           cat > /tmp/pakket.rb << 'FORMULA'
           class Pakket < Formula
-            desc "Track shipments from the command line"
+            desc "Track shipments from the command-line"
             homepage "https://github.com/rvben/pakket"
             version "VERSION_NUM"
             license "MIT"
